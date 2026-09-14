@@ -58,8 +58,10 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations() -> None:
+    # Set the URL on the config object BEFORE calling get_section so
+    # ConfigParser never attempts to interpolate the placeholder value.
+    config.set_main_option("sqlalchemy.url", get_url())
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
