@@ -33,8 +33,35 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters long');
+      return;
+    }
+    if (!/[A-Z]/.test(form.password)) {
+      setError('Password must contain at least one uppercase letter (A-Z)');
+      return;
+    }
+    if (!/[a-z]/.test(form.password)) {
+      setError('Password must contain at least one lowercase letter (a-z)');
+      return;
+    }
+    if (!/[0-9]/.test(form.password)) {
+      setError('Password must contain at least one number (0-9)');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\-]{3,50}$/.test(form.username)) {
+      setError('Username must be 3–50 characters (only letters, numbers, _, -)');
+      return;
+    }
+
     try {
-      const msg = await register(form.email, form.username, form.password, form.displayName || undefined);
+      const msg = await register(
+        form.email.trim(),
+        form.username.trim(),
+        form.password,
+        form.displayName.trim() || undefined
+      );
       setSuccess(msg);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -116,6 +143,9 @@ export default function RegisterPage() {
             <input id="reg-password" className="form-input" type="password" placeholder="••••••••"
               value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
               minLength={8} autoComplete="new-password" required />
+            <span className="text-xs text-muted" style={{ display: 'block', marginTop: '4px' }}>
+              At least 8 chars with 1 uppercase (A-Z), 1 lowercase (a-z), and 1 number (0-9)
+            </span>
             {form.password && (
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div className="progress">

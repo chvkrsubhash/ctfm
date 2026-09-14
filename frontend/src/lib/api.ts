@@ -95,8 +95,14 @@ export function getErrorMessage(error: unknown): string {
     const detail = error.response?.data?.detail;
     if (typeof detail === 'string') return detail;
     if (Array.isArray(detail) && detail.length > 0) {
-      return detail.map((d: { msg: string }) => d.msg).join(', ');
+      return detail
+        .map((d: { msg?: string; loc?: string[] }) => {
+          const msg = d.msg || 'Invalid field';
+          return msg.replace(/^Value error,\s*/i, '');
+        })
+        .join(', ');
     }
+    if (error.response?.data?.message) return error.response.data.message;
     if (error.message) return error.message;
   }
   return 'An unexpected error occurred';
