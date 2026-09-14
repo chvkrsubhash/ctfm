@@ -1,0 +1,12 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>Announcement — $app_name</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0a0e1a;font-family:'Segoe UI',Arial,sans-serif;color:#e2e8f0}.wrapper{max-width:600px;margin:40px auto;background:#111827;border-radius:16px;overflow:hidden;border:1px solid #1e2a3d}.header{background:linear-gradient(135deg,#1a1f35,#0f172a);padding:32px;text-align:center;border-bottom:1px solid #1e2a3d}.logo{font-size:20px;font-weight:700;color:#38bdf8}.event-label{font-size:12px;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:1px}.body{padding:40px 32px}h1{font-size:22px;color:#f1f5f9;margin-bottom:8px}.announcement-meta{font-size:13px;color:#64748b;margin-bottom:24px}.announcement-content{background:#0f172a;border-left:3px solid #38bdf8;padding:20px;border-radius:0 8px 8px 0;color:#cbd5e1;line-height:1.7;white-space:pre-wrap}.btn{display:inline-block;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff!important;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;margin-top:24px}.footer{padding:24px 32px;text-align:center;font-size:12px;color:#475569;border-top:1px solid #1e2a3d}.footer a{color:#38bdf8;text-decoration:none}</style></head>
+<body><div class="wrapper">
+  <div class="header"><div class="logo">📢 Announcement</div><div class="event-label">$event_name</div></div>
+  <div class="body">
+    <p style="color:#94a3b8;margin-bottom:16px">Hi <strong style="color:#f1f5f9">$username</strong>, there's a new announcement for <strong style="color:#38bdf8">$event_name</strong>:</p>
+    <h1>$announcement_title</h1>
+    <div class="announcement-content">$announcement_content</div>
+    <p style="text-align:center"><a class="btn" href="$event_url">View Event</a></p>
+  </div>
+  <div class="footer"><p>$app_name · <a href="$frontend_url">$frontend_url</a></p></div>
+</div></body></html>
