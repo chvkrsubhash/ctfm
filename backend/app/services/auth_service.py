@@ -1,21 +1,19 @@
 """
-CTF Platform — Authentication Service
+CTF Platform — Authentication Service (MongoDB / Beanie)
 Handles: registration, login, logout, token refresh, email verification,
 password reset, 2FA enrollment and verification.
 """
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Union
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import (
     hash_password, verify_password, needs_rehash,
     create_access_token, create_refresh_token, verify_refresh_token,
     generate_totp_secret, generate_totp_qr_code, verify_totp_code,
     generate_backup_codes, verify_backup_code,
-    hash_flag,  # re-used for backup code hashing
 )
 from app.core.config import settings
 from app.repositories.user_repository import UserRepository
@@ -25,7 +23,7 @@ from app.services.notification_service import NotificationService
 
 
 class AuthService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db=None):
         self.db = db
         self.user_repo = UserRepository(db)
         self.audit = AuditService(db)
@@ -133,14 +131,15 @@ class AuthService:
                 codes = list(user.backup_codes)
                 codes.pop(backup_idx)
                 user.backup_codes = codes
+                await user.save()
 
         # Rehash if needed
         if needs_rehash(user.hashed_password):
             user.hashed_password = hash_password(password)
+            await user.save()
 
         # Issue tokens
         access_token = create_access_token(str(user.id))
-        refresh_payload = verify_refresh_token(create_refresh_token(str(user.id)))
         refresh_token = create_refresh_token(str(user.id))
         refresh_data = verify_refresh_token(refresh_token)
 
@@ -275,17 +274,13 @@ class AuthService:
 
     # ── 2FA ───────────────────────────────────────────────────────────────
     async def begin_totp_setup(self, user: User) -> dict:
-        """Start TOTP enrollment. Returns secret + QR code (base64 PNG)."""
         secret = generate_totp_secret()
-        user.totp_secret = secret  # stored but NOT yet enabled
+        user.totp_secret = secret
+        await user.save()
         qr_code = generate_totp_qr_code(secret, user.username)
         return {"secret": secret, "qr_code": qr_code}
 
     async def confirm_totp_setup(self, user: User, code: str) -> list[str]:
-        """
-        Verify the TOTP code and activate 2FA.
-        Returns plaintext backup codes (shown ONCE to user).
-        """
         if not user.totp_secret:
             raise HTTPException(status_code=400, detail="2FA setup not initiated")
         if not verify_totp_code(user.totp_secret, code):
@@ -294,6 +289,7 @@ class AuthService:
         plain_codes, hashed_codes = generate_backup_codes(10)
         user.totp_enabled = True
         user.backup_codes = hashed_codes
+        await user.save()
 
         await self.audit.log(
             action="user.2fa.enabled",
@@ -309,6 +305,7 @@ class AuthService:
         user.totp_enabled = False
         user.totp_secret = None
         user.backup_codes = None
+        await user.save()
 
         await self.audit.log(
             action="user.2fa.disabled",

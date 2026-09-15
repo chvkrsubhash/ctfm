@@ -16,8 +16,10 @@ services:
         value: true
       - key: COOKIE_SAMESITE
         value: none
-      - key: DATABASE_URL
+      - key: MONGODB_URL
         sync: false
+      - key: MONGODB_DB_NAME
+        value: ctf_platform
       - key: SECRET_KEY
         sync: false
       - key: JWT_SECRET

@@ -31,10 +31,16 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
 
-    # ── Database ─────────────────────────────────────────────
-    DATABASE_URL: str = "postgresql+asyncpg://ctf_user:ctf_password@localhost:5432/ctf_platform"
-    DATABASE_POOL_SIZE: int = 10
-    DATABASE_MAX_OVERFLOW: int = 20
+    # ── Database (MongoDB) ───────────────────────────────────
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "ctf_platform"
+    DATABASE_URL: Optional[str] = None
+
+    @property
+    def mongo_uri(self) -> str:
+        if self.DATABASE_URL and (self.DATABASE_URL.startswith("mongodb://") or self.DATABASE_URL.startswith("mongodb+srv://")):
+            return self.DATABASE_URL
+        return self.MONGODB_URL
 
     # ── JWT ──────────────────────────────────────────────────
     JWT_SECRET: str = "CHANGE_ME_IN_PRODUCTION"

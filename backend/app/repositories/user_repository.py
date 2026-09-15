@@ -1,63 +1,42 @@
 """
-CTF Platform — User Repository
+CTF Platform — User Repository (MongoDB / Beanie)
 Database access layer for User and related entities.
 """
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Union
 from uuid import UUID
-
-from sqlalchemy import select, update, or_
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.user import (
     User, Role, UserSession, PasswordResetToken, EmailVerificationToken, ApiKey
 )
-from app.core.security import generate_secure_token, hash_password
+from app.core.security import generate_secure_token
+
+
+def _to_uuid(val: Union[UUID, str]) -> UUID:
+    if isinstance(val, UUID):
+        return val
+    return UUID(str(val))
 
 
 class UserRepository:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db=None):
         self.db = db
 
     # ── User CRUD ─────────────────────────────────────────────────────────
-    async def get_by_id(self, user_id: UUID | str) -> Optional[User]:
-        result = await self.db.execute(
-            select(User)
-            .where(User.id == user_id)
-            .options(selectinload(User.roles))
-        )
-        return result.scalar_one_or_none()
+    async def get_by_id(self, user_id: Union[UUID, str]) -> Optional[User]:
+        uid = _to_uuid(user_id)
+        return await User.get(uid)
 
     async def get_by_email(self, email: str) -> Optional[User]:
-        result = await self.db.execute(
-            select(User)
-            .where(User.email == email.lower())
-            .options(selectinload(User.roles))
-        )
-        return result.scalar_one_or_none()
+        return await User.find_one(User.email == email.lower())
 
     async def get_by_username(self, username: str) -> Optional[User]:
-        result = await self.db.execute(
-            select(User)
-            .where(User.username == username.lower())
-            .options(selectinload(User.roles))
-        )
-        return result.scalar_one_or_none()
+        return await User.find_one(User.username == username.lower())
 
     async def get_by_email_or_username(self, identifier: str) -> Optional[User]:
-        result = await self.db.execute(
-            select(User)
-            .where(
-                or_(
-                    User.email == identifier.lower(),
-                    User.username == identifier.lower(),
-                )
-            )
-            .options(selectinload(User.roles))
-        )
-        return result.scalar_one_or_none()
+        ident = identifier.lower()
+        return await User.find_one({"$or": [{"email": ident}, {"username": ident}]})
 
     async def create(
         self,
@@ -72,169 +51,148 @@ class UserRepository:
             username=username.lower(),
             hashed_password=hashed_password,
             display_name=display_name or username,
+            roles=["participant"],
         )
-        self.db.add(user)
-        await self.db.flush()  # get the ID without committing
+        await user.insert()
         return user
 
-    async def update_last_login(self, user_id: UUID | str) -> None:
-        await self.db.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(last_login_at=datetime.now(timezone.utc))
-        )
+    async def update_last_login(self, user_id: Union[UUID, str]) -> None:
+        uid = _to_uuid(user_id)
+        user = await User.get(uid)
+        if user:
+            user.last_login_at = datetime.now(timezone.utc)
+            await user.save()
 
-    async def mark_verified(self, user_id: UUID | str) -> None:
-        await self.db.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(is_verified=True)
-        )
+    async def mark_verified(self, user_id: Union[UUID, str]) -> None:
+        uid = _to_uuid(user_id)
+        user = await User.get(uid)
+        if user:
+            user.is_verified = True
+            await user.save()
 
-    async def update_password(self, user_id: UUID | str, hashed_password: str) -> None:
-        await self.db.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(hashed_password=hashed_password)
-        )
+    async def update_password(self, user_id: Union[UUID, str], hashed_password: str) -> None:
+        uid = _to_uuid(user_id)
+        user = await User.get(uid)
+        if user:
+            user.hashed_password = hashed_password
+            await user.save()
 
     async def email_exists(self, email: str) -> bool:
-        result = await self.db.execute(
-            select(User.id).where(User.email == email.lower())
-        )
-        return result.scalar_one_or_none() is not None
+        user = await User.find_one(User.email == email.lower())
+        return user is not None
 
     async def username_exists(self, username: str) -> bool:
-        result = await self.db.execute(
-            select(User.id).where(User.username == username.lower())
-        )
-        return result.scalar_one_or_none() is not None
+        user = await User.find_one(User.username == username.lower())
+        return user is not None
 
     # ── Roles ─────────────────────────────────────────────────────────────
     async def get_role_by_name(self, name: str) -> Optional[Role]:
-        result = await self.db.execute(select(Role).where(Role.name == name))
-        return result.scalar_one_or_none()
+        return await Role.find_one(Role.name == name)
 
     async def assign_role(self, user: User, role_name: str) -> None:
-        role = await self.get_role_by_name(role_name)
-        if role and role not in user.roles:
-            user.roles.append(role)
-            await self.db.flush()
+        if role_name not in user.roles:
+            user.roles.append(role_name)
+            await user.save()
 
     # ── Email Verification Tokens ─────────────────────────────────────────
-    async def create_verification_token(self, user_id: UUID | str) -> str:
-        """Create a new email verification token. Returns the raw token."""
-        # Invalidate any previous tokens
-        await self.db.execute(
-            update(EmailVerificationToken)
-            .where(EmailVerificationToken.user_id == user_id)
-            .values(used_at=datetime.now(timezone.utc))
+    async def create_verification_token(self, user_id: Union[UUID, str]) -> str:
+        uid = _to_uuid(user_id)
+        # Invalidate previous tokens
+        await EmailVerificationToken.find(EmailVerificationToken.user_id == uid).update(
+            {"$set": {"used_at": datetime.now(timezone.utc)}}
         )
 
         raw_token = generate_secure_token(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
 
         token = EmailVerificationToken(
-            user_id=user_id,
+            user_id=uid,
             token_hash=token_hash,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
-        self.db.add(token)
-        await self.db.flush()
+        await token.insert()
         return raw_token
 
     async def verify_email_token(self, raw_token: str) -> Optional[EmailVerificationToken]:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        result = await self.db.execute(
-            select(EmailVerificationToken).where(
-                EmailVerificationToken.token_hash == token_hash,
-                EmailVerificationToken.used_at.is_(None),
-                EmailVerificationToken.expires_at > datetime.now(timezone.utc),
-            )
-        )
-        return result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        return await EmailVerificationToken.find_one({
+            "token_hash": token_hash,
+            "used_at": None,
+            "expires_at": {"$gt": now},
+        })
 
     async def consume_verification_token(self, token: EmailVerificationToken) -> None:
         token.used_at = datetime.now(timezone.utc)
-        await self.db.flush()
+        await token.save()
 
     # ── Password Reset Tokens ─────────────────────────────────────────────
-    async def create_reset_token(self, user_id: UUID | str) -> str:
-        """Create a password reset token. Returns the raw token."""
+    async def create_reset_token(self, user_id: Union[UUID, str]) -> str:
+        uid = _to_uuid(user_id)
         # Invalidate previous tokens
-        await self.db.execute(
-            update(PasswordResetToken)
-            .where(PasswordResetToken.user_id == user_id)
-            .values(used_at=datetime.now(timezone.utc))
+        await PasswordResetToken.find(PasswordResetToken.user_id == uid).update(
+            {"$set": {"used_at": datetime.now(timezone.utc)}}
         )
 
         raw_token = generate_secure_token(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
 
         token = PasswordResetToken(
-            user_id=user_id,
+            user_id=uid,
             token_hash=token_hash,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         )
-        self.db.add(token)
-        await self.db.flush()
+        await token.insert()
         return raw_token
 
     async def get_reset_token(self, raw_token: str) -> Optional[PasswordResetToken]:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        result = await self.db.execute(
-            select(PasswordResetToken).where(
-                PasswordResetToken.token_hash == token_hash,
-                PasswordResetToken.used_at.is_(None),
-                PasswordResetToken.expires_at > datetime.now(timezone.utc),
-            )
-        )
-        return result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        return await PasswordResetToken.find_one({
+            "token_hash": token_hash,
+            "used_at": None,
+            "expires_at": {"$gt": now},
+        })
 
     async def consume_reset_token(self, token: PasswordResetToken) -> None:
         token.used_at = datetime.now(timezone.utc)
-        await self.db.flush()
+        await token.save()
 
     # ── Sessions ──────────────────────────────────────────────────────────
     async def create_session(
         self,
-        user_id: UUID | str,
+        user_id: Union[UUID, str],
         token_jti: str,
         expires_at: datetime,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> UserSession:
+        uid = _to_uuid(user_id)
         session = UserSession(
-            user_id=user_id,
+            user_id=uid,
             token_jti=token_jti,
             expires_at=expires_at,
             ip_address=ip_address,
             user_agent=user_agent,
         )
-        self.db.add(session)
-        await self.db.flush()
+        await session.insert()
         return session
 
     async def get_session_by_jti(self, jti: str) -> Optional[UserSession]:
-        result = await self.db.execute(
-            select(UserSession).where(
-                UserSession.token_jti == jti,
-                UserSession.is_revoked == False,
-                UserSession.expires_at > datetime.now(timezone.utc),
-            )
-        )
-        return result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        return await UserSession.find_one({
+            "token_jti": jti,
+            "is_revoked": False,
+            "expires_at": {"$gt": now},
+        })
 
     async def revoke_session(self, jti: str) -> None:
-        await self.db.execute(
-            update(UserSession)
-            .where(UserSession.token_jti == jti)
-            .values(is_revoked=True)
+        await UserSession.find(UserSession.token_jti == jti).update(
+            {"$set": {"is_revoked": True}}
         )
 
-    async def revoke_all_sessions(self, user_id: UUID | str) -> None:
-        await self.db.execute(
-            update(UserSession)
-            .where(UserSession.user_id == user_id)
-            .values(is_revoked=True)
+    async def revoke_all_sessions(self, user_id: Union[UUID, str]) -> None:
+        uid = _to_uuid(user_id)
+        await UserSession.find(UserSession.user_id == uid).update(
+            {"$set": {"is_revoked": True}}
         )

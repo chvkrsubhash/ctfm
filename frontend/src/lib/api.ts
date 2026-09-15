@@ -5,7 +5,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v
 
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: 90000, // 90s to accommodate Render free-tier cold starts
   withCredentials: true, // Send cookies (refresh token)
   headers: {
     'Content-Type': 'application/json',

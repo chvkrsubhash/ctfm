@@ -1,52 +1,28 @@
 """
-CTF Platform — Backend Tests: Authentication
+CTF Platform — Backend Tests: Authentication (MongoDB / Beanie)
 """
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from mongomock_motor import AsyncMongoMockClient
 
 from app.main import app
-from app.core.database import Base, get_db
-
-TEST_DB_URL = "postgresql+asyncpg://ctf_user:ctf_password@localhost:5432/ctf_platform_test"
-
-test_engine = create_async_engine(TEST_DB_URL, echo=False)
-TestSession = async_sessionmaker(test_engine, expire_on_commit=False)
-
-
-async def override_get_db():
-    async with TestSession() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-
-
-app.dependency_overrides[get_db] = override_get_db
+from app.core.database import init_db
+from app.models.user import User, Role
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_test_db():
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    mock_client = AsyncMongoMockClient()
+    await init_db(client=mock_client, db_name="test_ctf_db")
 
-    # Seed roles
-    async with TestSession() as db:
-        from app.models.user import Role
-        from sqlalchemy import select
-        for name in ["super_admin", "event_admin", "challenge_author", "moderator", "participant"]:
-            exists = (await db.execute(select(Role).where(Role.name == name))).scalar_one_or_none()
-            if not exists:
-                db.add(Role(name=name, description=name))
-        await db.commit()
+    for name in ["super_admin", "event_admin", "challenge_author", "moderator", "participant"]:
+        exists = await Role.find_one(Role.name == name)
+        if not exists:
+            role = Role(name=name, description=name)
+            await role.insert()
 
     yield
-
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest_asyncio.fixture
@@ -92,12 +68,10 @@ async def registered_user(client: AsyncClient):
     await client.post("/api/v1/auth/register", json={
         "email": "login@example.com", "username": "loginuser", "password": "Login@1234!"
     })
-    # Mark as verified in DB
-    async with TestSession() as db:
-        from app.models.user import User
-        from sqlalchemy import update
-        await db.execute(update(User).where(User.email == "login@example.com").values(is_verified=True))
-        await db.commit()
+    user = await User.find_one(User.email == "login@example.com")
+    if user:
+        user.is_verified = True
+        await user.save()
     return {"email": "login@example.com", "password": "Login@1234!"}
 
 
@@ -166,7 +140,6 @@ async def test_me_with_valid_token(client: AsyncClient, registered_user):
 # ── Security Tests ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_forgot_password_no_user_enumeration(client: AsyncClient):
-    """Same response for existing and non-existing emails."""
     r1 = await client.post("/api/v1/auth/forgot-password", json={"email": "exists@example.com"})
     r2 = await client.post("/api/v1/auth/forgot-password", json={"email": "doesnotexist@example.com"})
     assert r1.status_code == r2.status_code == 200
@@ -174,10 +147,9 @@ async def test_forgot_password_no_user_enumeration(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_sql_injection_login(client: AsyncClient):
-    """SQL injection in login should not crash the app."""
+async def test_injection_login(client: AsyncClient):
     resp = await client.post("/api/v1/auth/login", json={
         "identifier": "' OR '1'='1",
         "password": "' OR '1'='1",
     })
-    assert resp.status_code in (401, 422)  # rejected, not 500
+    assert resp.status_code in (401, 422)

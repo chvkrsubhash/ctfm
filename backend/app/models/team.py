@@ -1,25 +1,13 @@
 """
-CTF Platform — SQLAlchemy Models: Team, TeamMember, TeamInvitation
+CTF Platform — Beanie Models: Team, TeamMember, TeamInvitation
 """
-import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
-
-from sqlalchemy import (
-    Boolean, DateTime, Enum, ForeignKey, Integer,
-    String, Text, UniqueConstraint, func,
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
 
-from app.core.database import Base
-
-if TYPE_CHECKING:
-    from app.models.user import User
-    from app.models.event import Event
-    from app.models.submission import Submission
-    from app.models.score import Score
+from beanie import Document, Indexed
+from pydantic import Field
 
 
 class TeamMemberRole(str, enum.Enum):
@@ -35,90 +23,48 @@ class InvitationStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class Team(Base):
-    __tablename__ = "teams"
+class Team(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    event_id: uuid.UUID
+    name: str
+    slug: str
+    owner_id: Optional[uuid.UUID] = None
+    logo_url: Optional[str] = None
+    description: Optional[str] = None
+    is_private: bool = False
+    is_disqualified: bool = False
+    disqualification_reason: Optional[str] = None
+    country: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    event_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    slug: Mapped[str] = mapped_column(String(120), nullable=False)
-    owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    logo_url: Mapped[Optional[str]] = mapped_column(String(500))
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_disqualified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    disqualification_reason: Mapped[Optional[str]] = mapped_column(Text)
-    country: Mapped[Optional[str]] = mapped_column(String(2))
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("event_id", "name", name="uq_team_event_name"),
-        UniqueConstraint("event_id", "slug", name="uq_team_event_slug"),
-    )
-
-    event: Mapped["Event"] = relationship("Event", back_populates="teams")
-    owner: Mapped[Optional["User"]] = relationship("User", foreign_keys=[owner_id])
-    members: Mapped[List["TeamMember"]] = relationship(
-        "TeamMember", back_populates="team", cascade="all, delete-orphan"
-    )
-    invitations: Mapped[List["TeamInvitation"]] = relationship(
-        "TeamInvitation", back_populates="team", cascade="all, delete-orphan"
-    )
-    score: Mapped[Optional["Score"]] = relationship("Score", back_populates="team", uselist=False)
+    class Settings:
+        name = "teams"
 
     def __repr__(self) -> str:
         return f"<Team {self.name} @ event={self.event_id}>"
 
 
-class TeamMember(Base):
-    __tablename__ = "team_members"
+class TeamMember(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    team_id: uuid.UUID
+    user_id: uuid.UUID
+    role: TeamMemberRole = TeamMemberRole.MEMBER
+    joined_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    team_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    role: Mapped[TeamMemberRole] = mapped_column(
-        Enum(TeamMemberRole, name="team_member_role"), default=TeamMemberRole.MEMBER, nullable=False
-    )
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("team_id", "user_id", name="uq_team_member"),
-    )
-
-    team: Mapped[Team] = relationship("Team", back_populates="members")
-    user: Mapped["User"] = relationship("User")
+    class Settings:
+        name = "team_members"
 
 
-class TeamInvitation(Base):
-    __tablename__ = "team_invitations"
+class TeamInvitation(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    team_id: uuid.UUID
+    invitee_id: uuid.UUID
+    inviter_id: uuid.UUID
+    token: Indexed(str, unique=True)
+    status: InvitationStatus = InvitationStatus.PENDING
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    responded_at: Optional[datetime] = None
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    team_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    invitee_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    inviter_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    status: Mapped[InvitationStatus] = mapped_column(
-        Enum(InvitationStatus, name="invitation_status"), default=InvitationStatus.PENDING, nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-    team: Mapped[Team] = relationship("Team", back_populates="invitations")
-    invitee: Mapped["User"] = relationship("User", foreign_keys=[invitee_id])
-    inviter: Mapped["User"] = relationship("User", foreign_keys=[inviter_id])
+    class Settings:
+        name = "team_invitations"

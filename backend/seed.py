@@ -1,5 +1,5 @@
 """
-CTF Platform — Seed Data Script
+CTF Platform — Seed Data Script (MongoDB / Beanie)
 Creates roles, a superadmin, an event admin, a challenge author,
 a moderator, participants, a sample event, categories, and 10 challenges.
 
@@ -10,16 +10,20 @@ Usage:
 import asyncio
 import sys
 import os
+from datetime import datetime, timezone, timedelta
+from slugify import slugify
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app.core.database import AsyncSessionLocal, create_tables
+from app.core.database import init_db, close_db
 from app.core.security import hash_password, hash_flag
-from app.models import *  # noqa — import all models
-
+from app.models import (
+    User, Role, Event, Category, Challenge, ChallengeFlag, ChallengeHint,
+    EventStatus, EventVisibility, ScoringType, ChallengeStatus, FlagType, Difficulty,
+)
 
 ROLES = [
     ("super_admin", "Full platform administrator"),
@@ -44,178 +48,136 @@ SAMPLE_CHALLENGES = [
 
 
 async def seed():
-    print("🌱 Seeding CTF Platform database...")
-    print("Creating tables if they do not exist...")
-    await create_tables()
+    print("🌱 Seeding CTF Platform database (MongoDB)...")
+    await init_db()
 
-    async with AsyncSessionLocal() as db:
-        # ── Roles ──────────────────────────────────────────────────────────
-        print("Creating roles...")
-        role_map = {}
-        for name, desc in ROLES:
-            existing = (await db.execute(
-                __import__("sqlalchemy").select(Role).where(Role.name == name)
-            )).scalar_one_or_none()
-            if not existing:
-                role = Role(name=name, description=desc)
-                db.add(role)
-                await db.flush()
-                role_map[name] = role
-            else:
-                role_map[name] = existing
-        await db.commit()
+    # ── Roles ──────────────────────────────────────────────────────────
+    print("Creating roles...")
+    for name, desc in ROLES:
+        existing = await Role.find_one(Role.name == name)
+        if not existing:
+            role = Role(name=name, description=desc)
+            await role.insert()
 
-        # Reload roles
-        for name in role_map:
-            existing = (await db.execute(
-                __import__("sqlalchemy").select(Role).where(Role.name == name)
-            )).scalar_one_or_none()
-            role_map[name] = existing
+    # ── Users ──────────────────────────────────────────────────────────
+    print("Creating users...")
+    seed_users = [
+        ("superadmin@ctfplatform.dev", "superadmin", "Super Admin", "Admin@1234!", ["super_admin", "participant"]),
+        ("eventadmin@ctfplatform.dev", "eventadmin", "Event Admin", "Event@1234!", ["event_admin", "participant"]),
+        ("author@ctfplatform.dev", "challengeauthor", "Challenge Author", "Author@1234!", ["challenge_author", "participant"]),
+        ("moderator@ctfplatform.dev", "moderator", "Moderator", "Mod@12345!", ["moderator", "participant"]),
+        ("alice@example.com", "alice", "Alice", "Alice@1234!", ["participant"]),
+        ("bob@example.com", "bob", "Bob", "Bob@12345!", ["participant"]),
+    ]
 
-        # ── Users ──────────────────────────────────────────────────────────
-        print("Creating users...")
-
-        def make_user(email, username, display_name, password, role_names):
+    for email, username, display_name, password, roles in seed_users:
+        existing = await User.find_one(User.email == email)
+        if not existing:
             user = User(
-                email=email, username=username, display_name=display_name,
-                hashed_password=hash_password(password), is_active=True, is_verified=True,
+                email=email,
+                username=username,
+                display_name=display_name,
+                hashed_password=hash_password(password),
+                is_active=True,
+                is_verified=True,
+                roles=roles,
             )
-            for rn in role_names:
-                if rn in role_map:
-                    user.roles.append(role_map[rn])
-            return user
-
-        seed_users = [
-            ("superadmin@ctfplatform.dev", "superadmin", "Super Admin", "Admin@1234!", ["super_admin", "participant"]),
-            ("eventadmin@ctfplatform.dev", "eventadmin", "Event Admin", "Event@1234!", ["event_admin", "participant"]),
-            ("author@ctfplatform.dev", "challengeauthor", "Challenge Author", "Author@1234!", ["challenge_author", "participant"]),
-            ("moderator@ctfplatform.dev", "moderator", "Moderator", "Mod@12345!", ["moderator", "participant"]),
-            ("alice@example.com", "alice", "Alice", "Alice@1234!", ["participant"]),
-            ("bob@example.com", "bob", "Bob", "Bob@12345!", ["participant"]),
-        ]
-
-        created_users = {}
-        for email, username, display_name, password, role_names in seed_users:
-            existing = (await db.execute(
-                __import__("sqlalchemy").select(User).where(User.email == email)
-            )).scalar_one_or_none()
-            if not existing:
-                user = make_user(email, username, display_name, password, role_names)
-                db.add(user)
-                await db.flush()
-                created_users[username] = user
-                print(f"  Created user: {username} ({', '.join(role_names)})")
-            else:
-                created_users[username] = existing
-                print(f"  User exists: {username}")
-
-        await db.commit()
-
-        # ── Event ──────────────────────────────────────────────────────────
-        print("Creating sample CTF event...")
-        from datetime import datetime, timezone, timedelta
-        from slugify import slugify
-
-        event_admin = (await db.execute(
-            __import__("sqlalchemy").select(User).where(User.username == "eventadmin")
-        )).scalar_one_or_none()
-
-        existing_event = (await db.execute(
-            __import__("sqlalchemy").select(Event).where(Event.slug == "example-ctf-2026")
-        )).scalar_one_or_none()
-
-        if not existing_event:
-            now = datetime.now(timezone.utc)
-            event = Event(
-                name="Example CTF 2026",
-                slug="example-ctf-2026",
-                description="A sample CTF event for development and testing. Contains 10 challenges across multiple categories.",
-                rules="1. No sharing flags.\n2. Be respectful.\n3. Have fun!",
-                start_date=now + timedelta(days=1),
-                end_date=now + timedelta(days=3),
-                registration_start=now - timedelta(hours=1),
-                registration_end=now + timedelta(days=1),
-                timezone="UTC",
-                status=EventStatus.REGISTRATION_OPEN,
-                visibility=EventVisibility.PUBLIC,
-                scoring_type=ScoringType.STATIC,
-                max_teams=50,
-                team_size=4,
-                created_by=event_admin.id if event_admin else None,
-            )
-            db.add(event)
-            await db.flush()
-            print(f"  Created event: {event.name}")
-
-            # Score record will be created when teams are created
-            # ── Categories ────────────────────────────────────────────────────
-            category_map = {}
-            cat_defs = [
-                ("Web", "#3B82F6", "globe"),
-                ("Crypto", "#8B5CF6", "lock"),
-                ("Forensics", "#10B981", "search"),
-                ("OSINT", "#F59E0B", "eye"),
-                ("Pwn", "#EF4444", "terminal"),
-                ("Reverse Engineering", "#6366F1", "code"),
-                ("Steganography", "#EC4899", "image"),
-            ]
-            for cat_name, color, icon in cat_defs:
-                cat = Category(
-                    event_id=event.id,
-                    name=cat_name,
-                    slug=slugify(cat_name),
-                    color=color,
-                    icon=icon,
-                )
-                db.add(cat)
-                await db.flush()
-                category_map[cat_name] = cat
-
-            # ── Challenges ────────────────────────────────────────────────────
-            author = (await db.execute(
-                __import__("sqlalchemy").select(User).where(User.username == "challengeauthor")
-            )).scalar_one_or_none()
-
-            for ch_name, cat_name, description, points, difficulty, flag_value in SAMPLE_CHALLENGES:
-                cat = category_map.get(cat_name)
-                ch = Challenge(
-                    event_id=event.id,
-                    category_id=cat.id if cat else None,
-                    name=ch_name,
-                    slug=slugify(ch_name),
-                    description=description,
-                    points=points,
-                    current_points=points,
-                    difficulty=Difficulty(difficulty),
-                    author_id=author.id if author else None,
-                    status=ChallengeStatus.PUBLISHED,
-                )
-                db.add(ch)
-                await db.flush()
-
-                # Add flag (hashed)
-                flag = ChallengeFlag(
-                    challenge_id=ch.id,
-                    flag_type=FlagType.STATIC,
-                    flag_value=hash_flag(flag_value),
-                    is_case_sensitive=True,
-                )
-                db.add(flag)
-
-                # Add a hint
-                hint = ChallengeHint(
-                    challenge_id=ch.id,
-                    content=f"Think carefully about {cat_name.lower()} fundamentals.",
-                    cost=25,
-                    order_index=0,
-                )
-                db.add(hint)
-
-            await db.commit()
-            print(f"  Created {len(SAMPLE_CHALLENGES)} challenges with flags and hints")
+            await user.insert()
+            print(f"  Created user: {username} ({', '.join(roles)})")
         else:
-            print("  Event already exists, skipping")
+            print(f"  User exists: {username}")
 
+    # ── Event ──────────────────────────────────────────────────────────
+    print("Creating sample CTF event...")
+    event_admin = await User.find_one(User.username == "eventadmin")
+    existing_event = await Event.find_one(Event.slug == "example-ctf-2026")
+
+    if not existing_event:
+        now = datetime.now(timezone.utc)
+        event = Event(
+            name="Example CTF 2026",
+            slug="example-ctf-2026",
+            description="A sample CTF event for development and testing. Contains 10 challenges across multiple categories.",
+            rules="1. No sharing flags.\n2. Be respectful.\n3. Have fun!",
+            start_date=now + timedelta(days=1),
+            end_date=now + timedelta(days=3),
+            registration_start=now - timedelta(hours=1),
+            registration_end=now + timedelta(days=1),
+            timezone="UTC",
+            status=EventStatus.REGISTRATION_OPEN,
+            visibility=EventVisibility.PUBLIC,
+            scoring_type=ScoringType.STATIC,
+            max_teams=50,
+            team_size=4,
+            created_by=event_admin.id if event_admin else None,
+        )
+        await event.insert()
+        print(f"  Created event: {event.name}")
+
+        # ── Categories ────────────────────────────────────────────────────
+        category_map = {}
+        cat_defs = [
+            ("Web", "#3B82F6", "globe"),
+            ("Crypto", "#8B5CF6", "lock"),
+            ("Forensics", "#10B981", "search"),
+            ("OSINT", "#F59E0B", "eye"),
+            ("Pwn", "#EF4444", "terminal"),
+            ("Reverse Engineering", "#6366F1", "code"),
+            ("Steganography", "#EC4899", "image"),
+        ]
+        for cat_name, color, icon in cat_defs:
+            cat = Category(
+                event_id=event.id,
+                name=cat_name,
+                slug=slugify(cat_name),
+                color=color,
+                icon=icon,
+            )
+            await cat.insert()
+            category_map[cat_name] = cat
+
+        # ── Challenges ────────────────────────────────────────────────────
+        author = await User.find_one(User.username == "challengeauthor")
+
+        for ch_name, cat_name, description, points, difficulty, flag_value in SAMPLE_CHALLENGES:
+            cat = category_map.get(cat_name)
+            ch = Challenge(
+                event_id=event.id,
+                category_id=cat.id if cat else None,
+                name=ch_name,
+                slug=slugify(ch_name),
+                description=description,
+                points=points,
+                current_points=points,
+                difficulty=Difficulty(difficulty),
+                author_id=author.id if author else None,
+                status=ChallengeStatus.PUBLISHED,
+            )
+            await ch.insert()
+
+            # Add flag (hashed)
+            flag = ChallengeFlag(
+                challenge_id=ch.id,
+                flag_type=FlagType.STATIC,
+                flag_value=hash_flag(flag_value),
+                is_case_sensitive=True,
+            )
+            await flag.insert()
+
+            # Add a hint
+            hint = ChallengeHint(
+                challenge_id=ch.id,
+                content=f"Think carefully about {cat_name.lower()} fundamentals.",
+                cost=25,
+                order_index=0,
+            )
+            await hint.insert()
+
+        print(f"  Created {len(SAMPLE_CHALLENGES)} challenges with flags and hints")
+    else:
+        print("  Event already exists, skipping")
+
+    await close_db()
     print("\n✅ Seed complete!")
     print("\n📋 Test Credentials:")
     print("  superadmin@ctfplatform.dev / Admin@1234!")

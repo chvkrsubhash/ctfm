@@ -1,21 +1,20 @@
 """
 CTF Platform — FastAPI Dependencies
-Provides reusable dependencies for auth, RBAC, DB sessions, etc.
+Provides reusable dependencies for auth, RBAC, etc.
 """
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from uuid import UUID
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import verify_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-# Re-export DB dep
-DbSession = Annotated[AsyncSession, Depends(get_db)]
+# Re-export DB dep for backwards-compatibility
+DbSession = Annotated[Any, Depends(get_db)]
 
 
 async def get_current_user_id(
@@ -59,16 +58,14 @@ CurrentUserID = Annotated[str, Depends(get_current_user_id)]
 
 async def get_current_user(
     user_id: CurrentUserID,
-    db: DbSession,
 ):
     """
-    Load the full User model from the database.
-    Import lazily to avoid circular imports.
+    Load the full User model from MongoDB.
     """
     from app.repositories.user_repository import UserRepository
     from app.models.user import User
 
-    repo = UserRepository(db)
+    repo = UserRepository()
     user = await repo.get_by_id(user_id)
     if not user:
         raise HTTPException(
@@ -83,14 +80,13 @@ async def get_current_user(
     return user
 
 
-from app.models.user import User  # noqa: E402 – used in type annotation below
+from app.models.user import User  # noqa: E402
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 async def get_optional_current_user(
     request: Request,
-    db: DbSession,
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)] = None,
 ) -> Optional[User]:
     """Return the authenticated User if valid token is provided, else None."""
@@ -105,7 +101,7 @@ async def get_optional_current_user(
     if not user_id:
         return None
     from app.repositories.user_repository import UserRepository
-    repo = UserRepository(db)
+    repo = UserRepository()
     user = await repo.get_by_id(user_id)
     if user and not user.is_active:
         return None
@@ -121,7 +117,7 @@ def require_roles(*required_roles: str):
     Usage: Depends(require_roles("super_admin", "event_admin"))
     """
     async def _check(current_user: CurrentUser) -> User:
-        user_role_names = {r.name for r in current_user.roles}
+        user_role_names = set(current_user.roles)
         if not user_role_names.intersection(required_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

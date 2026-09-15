@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import init_db, close_db
 from app.api.v1 import api_router
 from app.api.v1.websocket import router as ws_router
 
@@ -36,9 +36,10 @@ limiter = Limiter(key_func=get_remote_address, enabled=settings.RATE_LIMIT_ENABL
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("CTF Platform starting", env=settings.APP_ENV, version=settings.APP_VERSION)
+    await init_db()
     yield
     logger.info("CTF Platform shutting down")
-    await engine.dispose()
+    await close_db()
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────
